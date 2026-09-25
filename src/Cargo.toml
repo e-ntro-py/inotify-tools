@@ -1,0 +1,21 @@
+[package]
+name = "inotify-tools"
+description = "Command line utilities for inotify/fanotify: inotifywait and inotifywatch"
+version = "4.23.9"
+edition = "2021"
+license = "GPL-2.0-or-later"
+repository = "https://github.com/inotify-tools/inotify-tools"
+rust-version = "1.63"
+autobins = false
+
+[[bin]]
+name = "inotifywait"
+path = "inotifywait.rs"
+
+[[bin]]
+name = "inotifywatch"
+path = "inotifywatch.rs"
+
+[dependencies]
+inotifytools = { path = "../libinotifytools" }
+libc = "0.2.150"

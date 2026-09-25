@@ -1,7 +1,11 @@
 #include "inotifytools/inotify.h"
 #include "inotifytools/inotifytools.h"
 
-#include "../../config.h"
+#if defined(__has_include)
+#if __has_include(<mcheck.h>)
+#define HAVE_MCHECK_H 1
+#endif
+#endif
 
 #include <unistd.h>
 
