@@ -8,7 +8,7 @@
 # ENABLE_SHARED ENABLE_STATIC ALL_STATIC CC CXX CFLAGS CXXFLAGS LDFLAGS
 # (see INSTALL).
 
-VERSION := $(shell cat VERSION)
+VERSION := $(shell packaging/version.sh)
 
 prefix ?= /usr/local
 exec_prefix ?= $(prefix)
@@ -55,6 +55,15 @@ OUT := $(CARGO_TARGET_DIR)/$(PROFILE_DIR)
 endif
 export CARGO_TARGET_DIR
 
+# ALL_STATIC tools get their own target dir, so the static and the normal
+# build do not keep invalidating each other.
+ifeq ($(ALL_STATIC),1)
+STATIC_TARGET_DIR := $(CARGO_TARGET_DIR)/static
+TOOLS_OUT := $(patsubst $(CARGO_TARGET_DIR)/%,$(STATIC_TARGET_DIR)/%,$(OUT))
+else
+TOOLS_OUT := $(OUT)
+endif
+
 MAN_DATE ?= $(shell date -u -r ChangeLog +'%Y-%m-%d' 2>/dev/null || date -u +'%Y-%m-%d')
 
 HDRDIR := libinotifytools/src/inotifytools
@@ -69,7 +78,7 @@ TEST_LINKS := src/inotifywait src/inotifywatch src/fsnotifywait src/fsnotifywatc
 # Needed to link the static library into C (rustc --print native-static-libs).
 STATIC_LIBS ?= -lgcc_s -lutil -lrt -lpthread -lm -ldl -lc
 
-.PHONY: all build headers man check unit-test unit-test-static cargo-test \
+.PHONY: FORCE all build headers man check unit-test unit-test-static cargo-test \
 	integration-test install install-strip install-doc uninstall clean \
 	distclean doc dist
 
@@ -77,7 +86,7 @@ all: build headers man $(TEST_LINKS)
 
 build:
 ifeq ($(ALL_STATIC),1)
-	RUSTFLAGS="$$RUSTFLAGS -C target-feature=+crt-static" \
+	RUSTFLAGS="$$RUSTFLAGS -C target-feature=+crt-static" CARGO_TARGET_DIR=$(STATIC_TARGET_DIR) \
 		$(CARGO) build $(CARGO_BUILD_FLAGS) -p inotify-tools --bins
 	$(CARGO) build $(CARGO_BUILD_FLAGS) -p inotifytools --lib
 else
@@ -111,12 +120,16 @@ $(HDRDIR)/fanotify.h: $(HDRDIR)/fanotify.h.in
 
 man: $(MANPAGES)
 
-man/%.1: man/%.1.in VERSION
+# Rewritten only when the version changes, so the man pages follow it.
+.version: FORCE
+	@echo $(VERSION) | cmp -s - $@ || echo $(VERSION) > $@
+
+man/%.1: man/%.1.in .version
 	sed -e 's|@MAN_DATE@|$(MAN_DATE)|g' -e 's|@MAN_PACKAGE_VERSION@|$(VERSION)|g' $< > $@
 
 $(TEST_LINKS): | build
 src/inotifywait src/inotifywatch:
-	$(LN_S) $(abspath $(OUT))/$(notdir $@) $@
+	$(LN_S) $(abspath $(TOOLS_OUT))/$(notdir $@) $@
 src/fsnotifywait: | src/inotifywait
 	$(LN_S) inotifywait $@
 src/fsnotifywatch: | src/inotifywatch
@@ -160,7 +173,7 @@ integration-test: all
 
 install: all
 	$(INSTALL) -d $(DESTDIR)$(bindir)
-	for t in $(TOOLS); do $(INSTALL_PROGRAM) $(OUT)/$$t $(DESTDIR)$(bindir)/$$t || exit 1; done
+	for t in $(TOOLS); do $(INSTALL_PROGRAM) $(TOOLS_OUT)/$$t $(DESTDIR)$(bindir)/$$t || exit 1; done
 	cd $(DESTDIR)$(bindir) && $(LN_S) inotifywait fsnotifywait && $(LN_S) inotifywatch fsnotifywatch
 	$(INSTALL) -d $(DESTDIR)$(libdir)
 ifeq ($(ENABLE_SHARED),1)
@@ -199,16 +212,19 @@ install-doc: doc
 
 # ----------------------------------------------------------------- misc
 
+# Release tarball, with the full version stamped into its VERSION file.
 dist:
+	packaging/version.sh --strict >/dev/null
 	rm -rf inotify-tools-$(VERSION)
 	git archive --format=tar --prefix=inotify-tools-$(VERSION)/ HEAD | tar xf -
 	git log --pretty=format:'%s' > inotify-tools-$(VERSION)/ChangeLog
+	echo $(VERSION) > inotify-tools-$(VERSION)/VERSION
 	tar czf inotify-tools-$(VERSION).tar.gz inotify-tools-$(VERSION)
 	rm -rf inotify-tools-$(VERSION)
 
 clean:
 	-$(CARGO) clean
-	rm -f $(GEN_HEADERS) $(MANPAGES) $(TEST_LINKS)
+	rm -f $(GEN_HEADERS) $(MANPAGES) $(TEST_LINKS) .version
 	rm -f libinotifytools/src/test libinotifytools/src/test-static
 	rm -rf $(TESTLIBDIR)
 	rm -rf libinotifytools/src/doc

@@ -2,6 +2,11 @@ name: build
 
 on: [push, pull_request]
 
+# Read-only by default; only tag, release and untag write (the tag and the
+# GitHub Release).
+permissions:
+  contents: read
+
 jobs:
   ubuntu-2204-multi:
 
@@ -9,7 +14,10 @@ jobs:
     env:
       GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
     steps:
-    - uses: actions/checkout@v1
+    - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      with:
+        fetch-depth: 0
+        persist-credentials: false
     - name: build_and_test_multi
       run: ./build_and_test_multi.sh clean
 
@@ -21,7 +29,174 @@ jobs:
     env:
       GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
     steps:
-    - uses: actions/checkout@v1
+    - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      with:
+        fetch-depth: 0
+        persist-credentials: false
     - name: build_and_test_multi
       run: ./build_and_test.sh clean && ./build_and_test_multi.sh clean
 
+  # The release assets, built on every push and PR: the source tarball
+  # (make dist), and static tools plus the library built from that tarball,
+  # which also proves it builds without git.
+  binaries:
+    name: binaries (${{ matrix.arch }})
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: x86_64
+            runner: ubuntu-24.04
+          - arch: aarch64
+            runner: ubuntu-24.04-arm
+    steps:
+      # fetch-depth: 0 for the commit count.
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30 # stable
+
+      - name: Build from the release tarball
+        run: |
+          set -euo pipefail
+          version="$(packaging/version.sh --strict)"
+          make dist
+          mkdir -p dist
+          tar xzf "inotify-tools-$version.tar.gz" -C "$RUNNER_TEMP"
+          src="$RUNNER_TEMP/inotify-tools-$version"
+          make -C "$src" -j"$(nproc)" ALL_STATIC=1
+          make -C "$src" install ALL_STATIC=1 prefix=/usr DESTDIR="$RUNNER_TEMP/stage"
+
+          bin="$RUNNER_TEMP/stage/usr/bin/inotifywait"
+          out="$("$bin" --help | head -n1 || true)" # --help exits 1
+          [ "$out" = "inotifywait $version" ] || { echo "::error::reports \"$out\", expected \"inotifywait $version\""; exit 1; }
+          file -L "$bin" | grep -q 'static' || { echo "::error::$bin is not static"; file -L "$bin"; exit 1; }
+
+          tar czf "dist/inotify-tools-$version-${{ matrix.arch }}-linux.tar.gz" -C "$RUNNER_TEMP/stage" usr
+          if [ "${{ matrix.arch }}" = x86_64 ]; then mv "inotify-tools-$version.tar.gz" dist/; fi
+          ls -l dist
+
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: dist-${{ matrix.arch }}
+          path: dist/
+          if-no-files-found: error
+
+  # --------------------------------------------------------------------------
+  # Every commit on master that passes all builds is released as
+  # <series>.<commit count> (packaging/version.sh). The tag is created as
+  # soon as the run starts: GITHUB_TOKEN can only create a ref whose
+  # .github/workflows/ matches master's tip (see packaging/release-tag.sh).
+  # `untag` removes it again if the release never happens.
+  # --------------------------------------------------------------------------
+  tag:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    if: github.ref == 'refs/heads/master' && github.event_name == 'push'
+    permissions:
+      contents: write
+    outputs:
+      tag_name: ${{ steps.version.outputs.tag_name }}
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Determine version
+        id: version
+        run: echo "tag_name=$(packaging/version.sh --strict)" >> "$GITHUB_OUTPUT"
+
+      - name: Create tag
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.version.outputs.tag_name }}
+        run: packaging/release-tag.sh ensure "$TAG" "$GITHUB_SHA"
+
+  release:
+    # Everything must be green first.
+    needs: [tag, ubuntu-2204-multi, ubuntu-2404-multi, binaries]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    if: github.ref == 'refs/heads/master' && github.event_name == 'push'
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          persist-credentials: false
+
+      - name: Verify release tag
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ needs.tag.outputs.tag_name }}
+        run: packaging/release-tag.sh ensure "$TAG" "$GITHUB_SHA"
+
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          path: dist
+          pattern: dist-*
+          merge-multiple: true
+
+      - name: Verify assets and generate checksums
+        env:
+          VERSION: ${{ needs.tag.outputs.tag_name }}
+        run: |
+          set -euo pipefail
+          cd dist
+          for asset in \
+            "inotify-tools-$VERSION.tar.gz" \
+            "inotify-tools-$VERSION-x86_64-linux.tar.gz" \
+            "inotify-tools-$VERSION-aarch64-linux.tar.gz"; do
+            [ -s "$asset" ] || { echo "::error::release asset $asset is missing or empty"; exit 1; }
+          done
+          sha256sum inotify-tools-* > checksums.txt
+          cat checksums.txt
+
+      - name: Build release notes
+        env:
+          HEAD_COMMIT_MESSAGE: ${{ github.event.head_commit.message }}
+        run: |
+          printf '%s\n' "$HEAD_COMMIT_MESSAGE" \
+            | sed -E '/^[[:space:]]*(signed-off-by|co-authored-by):/Id' \
+            | cat -s > release-notes.md
+          cat release-notes.md
+
+      # No target_commitish (the tag exists): GITHUB_TOKEN's workflows check
+      # would reject it once a later .github/workflows change is master's
+      # tip. make_latest: legacy, so a run finishing late cannot mark an
+      # older version as latest.
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2
+        with:
+          tag_name: ${{ needs.tag.outputs.tag_name }}
+          name: ${{ needs.tag.outputs.tag_name }}
+          body_path: release-notes.md
+          prerelease: false
+          make_latest: legacy
+          files: |
+            dist/inotify-tools-*
+            dist/checksums.txt
+
+  # A failed or cancelled run must not leave a tag on an unreleased commit.
+  untag:
+    needs: [tag, release]
+    if: always() && needs.tag.result == 'success' && needs.release.result != 'success'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          persist-credentials: false
+
+      - name: Delete tag
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ needs.tag.outputs.tag_name }}
+        run: packaging/release-tag.sh remove "$TAG" "$GITHUB_SHA"

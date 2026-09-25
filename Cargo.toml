@@ -2,11 +2,8 @@
 resolver = "2"
 members = ["libinotifytools", "src"]
 
-# Note: the package metadata is repeated in each member (rather than using
-# workspace inheritance) so the code builds with older distribution
-# toolchains (Rust >= 1.63).  Cargo requires a three-component version; the
-# full package version (as printed by --help and in the man pages) lives in
-# the VERSION file.
+# Package metadata is repeated per member (no workspace inheritance) for
+# Rust 1.63.  The real version comes from packaging/version.sh.
 
 [profile.release]
 panic = "abort"

@@ -19,9 +19,9 @@ pub const EXIT_TIMEOUT: i32 = 2;
 
 const MAXLEN: usize = 4096;
 
-/// The package version, e.g. "4.23.9.0".
+/// The package version, e.g. "4.26.261" (see packaging/version.sh).
 pub fn package_version() -> &'static str {
-    include_str!("../VERSION").trim()
+    env!("INOTIFY_TOOLS_VERSION")
 }
 
 pub fn print_event_descriptions() {

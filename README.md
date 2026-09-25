@@ -31,3 +31,10 @@ to generate the installed headers) and, for `make check`, a C++ compiler.
     make install              # prefix=/usr/local by default
 
 See [INSTALL](INSTALL) for all options.
+
+Releases
+--------
+
+Every commit on master that passes all CI builds is released as
+`<series>.<commit count>` (e.g. `4.26.261`; the series is in `VERSION`), with
+a source tarball and static x86_64/aarch64 Linux builds.
