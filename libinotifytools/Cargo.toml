@@ -1,0 +1,19 @@
+[package]
+name = "inotifytools"
+description = "A small library to simplify the use of Linux's inotify and fanotify interfaces (C-ABI compatible libinotifytools)"
+version = "4.23.9"
+edition = "2021"
+license = "GPL-2.0-or-later"
+repository = "https://github.com/inotify-tools/inotify-tools"
+rust-version = "1.63"
+build = "build.rs"
+
+[lib]
+name = "inotifytools"
+path = "src/lib.rs"
+# rlib: used by the command line tools.
+# cdylib/staticlib: drop-in replacements for the C libinotifytools.so / .a.
+crate-type = ["rlib", "cdylib", "staticlib"]
+
+[dependencies]
+libc = "0.2.150"
