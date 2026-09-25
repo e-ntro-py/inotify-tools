@@ -22,6 +22,7 @@
 /src/fsnotifywait
 /src/fsnotifywatch
 
+/.version
 man/inotifywait.1
 man/inotifywatch.1
 man/fsnotifywait.1

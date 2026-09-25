@@ -4,7 +4,7 @@ version = 3
 
 [[package]]
 name = "inotify-tools"
-version = "4.23.9"
+version = "4.26.0"
 dependencies = [
  "inotifytools",
  "libc",
@@ -12,7 +12,7 @@ dependencies = [
 
 [[package]]
 name = "inotifytools"
-version = "4.23.9"
+version = "4.26.0"
 dependencies = [
  "libc",
 ]
